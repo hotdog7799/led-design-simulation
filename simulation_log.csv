@@ -1,0 +1,5 @@
+Timestamp,Samples,Working_Distance_mm,ROI_mm,Mean_Irradiance_on_ROI_W_m2,Total_Power_on_ROI_mW,Notes
+2025-10-22 21:59:47,0,3.6000000000000005,11.0x12.3,708.44,95.8525,"Scenario A, 16 LEDs (5x5 grid, 1.8mm pitch)"
+2025-10-22 22:03:27,0,3.6000000000000005,11.0x12.3,1146.84,155.1674,"Scenario A, 16 LEDs (5x5 grid, 1.8mm pitch)"
+2025-10-22 22:14:15,0,3.6000000000000005,11.0x12.3,1146.84,155.1674,"Scenario A, 16 LEDs (5x5 grid, 1.8mm pitch)"
+2025-10-22 22:16:31,0,3.6000000000000005,11.0x12.3,1146.84,155.1674,"Scenario A, 16 LEDs (5x5 grid, 1.8mm pitch)"
