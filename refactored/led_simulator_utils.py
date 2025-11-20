@@ -164,7 +164,7 @@ def plot_irradiance_map(
         edgecolor="gray",
         facecolor="none",
         linestyle=":",
-        label="Camera Cavity",
+        label=f"Camera Cavity: {config_params['cavity_h']}x{config_params['cavity_w']}",
     )
     ax.add_patch(cavity_rect)
 
