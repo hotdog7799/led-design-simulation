@@ -35,7 +35,14 @@ led_specs:
   single_led_total_power_mw: 15.832 # 보정된 값
   min_led_separation_mm: 2.5 # LED 물리적 최소 간격
   num_uv_leds: 4
-
+# [NEW] 면 광원 모델링을 위한 추가 파라미터 (SMD 2516 규격)
+  led_width_mm: 2.54   # LED 가로 길이 (X축 방향 가정)
+  led_height_mm: 1.62  # LED 세로 길이 (Y축 방향 가정)
+  # [NEW] 면 광원 분할 개수 (홀수 추천: 중심점 포함을 위해)
+  # 5x3 = 15개의 점 광원으로 하나의 LED를 근사합니다.
+  subsample_x: 5       
+  subsample_y: 3
+  
 # --- White LED 설정 ---
 white_led:
   num_to_place: 2

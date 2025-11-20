@@ -108,7 +108,12 @@ def run_optimization_sweep(params):
     loss_weights = config["loss_weights"]
     grid_size = config["simulation"]["grid_size_mm"]
     resolution = config["simulation"]["resolution"]
-
+    led_geom = {
+        "led_width_mm": config["led_specs"]["led_width_mm"],
+        "led_height_mm": config["led_specs"]["led_height_mm"],
+        "subsample_x": config["led_specs"]["subsample_x"],
+        "subsample_y": config["led_specs"]["subsample_y"],
+    }
     results_list = []
     total_combinations = len(param_combinations)
     print(f"--- Starting Optimization Search ({total_combinations} combinations) ---")
@@ -139,7 +144,12 @@ def run_optimization_sweep(params):
             )
         else:
             X_mm, Y_mm, illum_map_arb = led_sim.simulate_illumination(
-                uv_led_positions, beam_func, actual_dist, grid_size, resolution
+                uv_led_positions,
+                beam_func,
+                actual_dist,
+                grid_size,
+                resolution,
+                led_geom_params=led_geom,
             )
             power_on_roi, uniformity_roi, scale_factor = led_sim.analyze_roi(
                 X_mm, Y_mm, illum_map_arb, roi_w, roi_h, single_power_mw, num_uv
@@ -245,6 +255,7 @@ def analyze_and_plot_results(results_list, params):
         params["actual_dist"],
         config["simulation"]["grid_size_mm"],
         config["simulation"]["resolution"],
+        led_geom_params=led_geom,
     )
     power_best, uniformity_best, scale_factor_best = led_sim.analyze_roi(
         X_best,

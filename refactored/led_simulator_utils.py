@@ -66,26 +66,105 @@ def place_white_leds_fixed_xaxis(
     return selected_white_positions, crosstalk_penalty
 
 
+def generate_sub_points(center_pos, w, h, nx, ny):
+    """
+    LED 중심 좌표를 기준으로 면 광원을 모사하는 sub-point들의 좌표 리스트를 생성합니다.
+    가정: LED는 Z축을 향해 누워있으며, Width는 X축, Height는 Y축과 평행합니다.
+    """
+    if nx <= 1 and ny <= 1:
+        return [center_pos]  # 점 광원(기존 모드)
+
+    # LED 표면 내 격자 생성
+    # linspace를 사용하여 가장자리까지 포함하거나,
+    # 면적 중심을 대표하도록 간격을 조정할 수 있습니다.
+    # 여기서는 면적 전체를 커버하도록 균등 분할합니다.
+    xs = np.linspace(-w / 2.0, w / 2.0, nx)
+    ys = np.linspace(-h / 2.0, h / 2.0, ny)
+
+    sub_points = []
+    for dx in xs:
+        for dy in ys:
+            # 중심 좌표에 오프셋 더하기 (Z값은 동일)
+            offset = np.array([dx, dy, 0.0])
+            sub_points.append(center_pos + offset)
+
+    return sub_points
+
+
 def simulate_illumination(
-    led_positions, beam_profile_func, target_z, grid_size, resolution
+    led_positions,
+    beam_profile_func,
+    target_z,
+    grid_size,
+    resolution,
+    # [NEW] 면 광원 파라미터 (기본값 None 처리로 하위 호환성 유지 가능)
+    led_geom_params=None,
 ):
     """
-    (a,b) 좌표 기반 4개 UV LED 배치 및 유효성 검사 함수
+    (a,b) 좌표 기반 LED 배치에 따른 조도 분포를 시뮬레이션합니다.
+    led_geom_params가 제공되면 면 광원(Area Source) 모델을 사용합니다.
     """
     x_coords = np.linspace(-grid_size / 2, grid_size / 2, resolution)
     y_coords = np.linspace(-grid_size / 2, grid_size / 2, resolution)
     X, Y = np.meshgrid(x_coords, y_coords)
+
+    # 타겟 평면의 좌표 텐서 (H, W, 3)
+    target_points = np.stack([X, Y, np.full_like(X, target_z)], axis=-1)
+
     total_illum_map = np.zeros_like(X)
 
-    for led_pos in led_positions:
-        vectors_to_led = led_pos - np.stack([X, Y, np.full_like(X, target_z)], axis=-1)
-        distances = np.linalg.norm(vectors_to_led, axis=-1)
-        distances = np.where(distances == 0, 1e-9, distances)
-        cos_theta = (target_z - led_pos[2]) / distances
-        angle_degrees = np.degrees(np.arccos(np.clip(cos_theta, 0, 1)))
-        beam_intensity = beam_profile_func(angle_degrees)
-        intensity_contribution = (beam_intensity * cos_theta) / (distances**2)
-        total_illum_map += intensity_contribution
+    # 면 광원 파라미터 추출
+    if led_geom_params:
+        w = led_geom_params.get("led_width_mm", 0)
+        h = led_geom_params.get("led_height_mm", 0)
+        nx = led_geom_params.get("subsample_x", 1)
+        ny = led_geom_params.get("subsample_y", 1)
+        num_sub_points = nx * ny
+    else:
+        # 파라미터가 없으면 점 광원으로 처리
+        w, h, nx, ny = 0, 0, 1, 1
+        num_sub_points = 1
+
+    for led_center_pos in led_positions:
+        # 이 LED를 구성하는 점 광원들(Sub-LEDs) 생성
+        sub_points = generate_sub_points(led_center_pos, w, h, nx, ny)
+
+        # 단일 LED에 대한 조도 누적 (나중에 평균 냄)
+        single_led_map = np.zeros_like(X)
+
+        for sp in sub_points:
+            # 벡터 계산: Sub-LED 위치 -> 타겟 픽셀들
+            vectors_to_led = sp - target_points  # (H, W, 3)
+
+            # 거리 제곱 및 거리 계산
+            dist_sq = np.sum(vectors_to_led**2, axis=-1)
+            distances = np.sqrt(dist_sq)
+            distances = np.where(distances == 0, 1e-9, distances)  # 0으로 나누기 방지
+
+            # Lambertian Cosine Law (입사각)
+            # cos_theta = z_dist / distance
+            # sub_point의 z는 보통 0, target_z는 거리.
+            # 방향: Target -> LED 벡터의 z성분은 (led_z - target_z) 이므로 음수.
+            # 크기만 필요하므로 절대값 사용하거나 (target_z - sp[2])
+            dz = target_z - sp[2]
+            cos_theta = dz / distances
+
+            # 방사각(Emission Angle) 계산
+            # LED 법선 벡터는 (0,0,1)이라 가정.
+            # LED에서 Target으로 향하는 벡터와 법선 벡터 사이의 각도
+            # Target이 (x,y,z), LED가 (0,0,0)일 때 방사각은 입사각과 동일(평행 평면)
+            angle_degrees = np.degrees(np.arccos(np.clip(cos_theta, 0, 1)))
+
+            # 빔 프로파일 적용
+            beam_intensity = beam_profile_func(angle_degrees)
+
+            # 조도 합산: (I * cos_theta) / r^2
+            intensity_contribution = (beam_intensity * cos_theta) / dist_sq
+            single_led_map += intensity_contribution
+
+        # 면 광원 효과: N개의 점으로 나눴으니 총 파워 보존을 위해 N으로 나눔
+        total_illum_map += single_led_map / num_sub_points
+
     return X, Y, total_illum_map
 
 
