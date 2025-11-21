@@ -6,6 +6,7 @@ optics:
   phasemask_to_object_distance_mm: 6.0
   roi_width_mm: 11.0
   roi_height_mm: 12.3
+  center_roi_ratio: 0.5
 
 # --- 시나리오 설정 (A 또는 B의 주석을 선택하여 사용) ---
 scenario:
@@ -35,6 +36,10 @@ led_specs:
   single_led_total_power_mw: 15.832 # 보정된 값
   min_led_separation_mm: 2.5 # LED 물리적 최소 간격
   num_uv_leds: 4
+  led_width_mm: 2.54
+  led_height_mm: 1.62
+  subsample_x: 5
+  subsample_y: 3
 
 # --- White LED 설정 ---
 white_led:
@@ -50,15 +55,19 @@ simulation:
 
 # --- 최적화 파라미터 탐색 범위 ---
 optimization_ranges:
-  a_range: {start: 1.0, stop: 8.1, step: 0.2}
-  b_range: {start: 5.4, stop: 9.1, step: 0.2}
+  a_range: {start: 1.0, stop: 8.1, step: 0.1}
+  b_range: {start: 5.4, stop: 9.1, step: 0.1}
 
 # --- Loss Function 가중치 (W_COUNT 제거) ---
 loss_weights:
-  W_POWER: 1000.0
-  W_UNIFORMITY: 100000.0
-  W_CROSSTALK: 100000.0
   TARGET_POWER_MW: 34.0
+  # [UPDATED] 가중치 세분화
+  W_POWER: 1000.0
+  W_UNIFORMITY_OVERALL: 50000.0 # 전체 영역 균일도
+  W_UNIFORMITY_CENTER: 100000.0 # [NEW] 중앙부 균일도 (가중치 높음)
+  W_UNIFORMITY_WHITE: 20000.0   # [NEW] White LED 균일도
+  
+  W_CROSSTALK: 100000.0         # 배치 불가능 시 강력한 패널티
   # W_center uniformity or/and center power: 가운데가 늘 어두워서 가운데가 좀 밝아지도록 되면 좋겠어.
   
 
