@@ -235,6 +235,7 @@ def plot_irradiance_map(
     led_positions_white,
     stats,
     title_prefix="",
+    led_geom_params=None,
 ):
     """
     주어진 Matplotlib 축(ax)에 2D 조도 맵과 오버레이를 그립니다.
@@ -281,16 +282,57 @@ def plot_irradiance_map(
     )
     ax.add_patch(cavity_rect)
 
-    # LED Positions
-    if led_positions_uv:
-        uv_x = [p[0] for p in led_positions_uv]
-        uv_y = [p[1] for p in led_positions_uv]
-        ax.scatter(uv_x, uv_y, c="w", marker="o", s=30, label="UV")
+    # 1. 면 광원 파라미터 준비
+    if led_geom_params:
+        w = led_geom_params.get("led_width_mm", 0)
+        h = led_geom_params.get("led_height_mm", 0)
+        nx = led_geom_params.get("subsample_x", 1)
+        ny = led_geom_params.get("subsample_y", 1)
+        marker_size = 5  # 점이 많아지므로 사이즈를 좀 줄임
+    else:
+        w, h, nx, ny = 0, 0, 1, 1
+        marker_size = 30  # 기존 사이즈
 
+    # 2. UV LED 그리기
+    if led_positions_uv:
+        uv_points_x = []
+        uv_points_y = []
+
+        for pos in led_positions_uv:
+            # 중심점 하나를 N개의 점으로 쪼개서 리스트에 추가
+            sub_pts = generate_sub_points(pos, w, h, nx, ny)
+            for sp in sub_pts:
+                uv_points_x.append(sp[0])
+                uv_points_y.append(sp[1])
+
+        ax.scatter(
+            uv_points_x,
+            uv_points_y,
+            c="w",
+            marker="o",
+            s=marker_size,
+            label=f"UV ({len(uv_points_x)} pts)",
+        )
+
+    # 3. White LED 그리기
     if led_positions_white:
-        wh_x = [p[0] for p in led_positions_white]
-        wh_y = [p[1] for p in led_positions_white]
-        ax.scatter(wh_x, wh_y, c="lime", marker="s", s=30, label="White")
+        wh_points_x = []
+        wh_points_y = []
+
+        for pos in led_positions_white:
+            sub_pts = generate_sub_points(pos, w, h, nx, ny)
+            for sp in sub_pts:
+                wh_points_x.append(sp[0])
+                wh_points_y.append(sp[1])
+
+        ax.scatter(
+            wh_points_x,
+            wh_points_y,
+            c="lime",
+            marker="s",
+            s=marker_size,
+            label=f"White ({len(wh_points_x)} pts)",
+        )
 
     if stats:
         title = f"{title_prefix}\nPwr={stats.get('power',0):.1f}mW, Uni(All)={stats.get('uni_all',0):.2f}, Uni(Cen)={stats.get('uni_cen',0):.2f}"

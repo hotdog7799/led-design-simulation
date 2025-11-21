@@ -334,6 +334,7 @@ def analyze_and_plot_results(results_list, white_illum_map_ref, params):
         [],
         {"power": p_uv, "uni_all": u_uv_all, "uni_cen": u_uv_cen},
         "UV Light Only",
+        led_geom_params=led_geom,
     )
 
     # 2. White Plot
@@ -346,6 +347,7 @@ def analyze_and_plot_results(results_list, white_illum_map_ref, params):
         white_leds,
         {"power": p_wh, "uni_all": u_wh_all, "uni_cen": u_wh_cen},
         "White Light Only",
+        led_geom_params=led_geom,
     )
 
     # 3. Combined Plot
@@ -371,9 +373,10 @@ def analyze_and_plot_results(results_list, white_illum_map_ref, params):
         white_leds,
         {"power": p_comb, "uni_all": u_comb_all, "uni_cen": u_comb_cen},
         "Combined (UV + White)",
+        led_geom_params=led_geom,
     )
 
-    plt.tight_layout()
+    # plt.tight_layout()
     plt.savefig(os.path.join(output_dir, f"{timestamp}_result_maps.png"))
     plt.show()
 
