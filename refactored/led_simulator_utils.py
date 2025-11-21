@@ -198,25 +198,32 @@ def analyze_roi(
     return roi_power_mw, uni_overall, uni_center, scale_factor
 
 
-def calculate_loss(
-    power_roi, uni_overall, uni_center, uni_white, crosstalk_penalty, weights
-):
+def calculate_loss(power_roi, uni_overall, uni_center, uni_white, weights):
     """
-    전체, 중앙, 화이트 균일도를 모두 고려하여 Loss를 계산합니다.
+    [Engineering Update]
+    모든 항목을 비율(%) 단위로 정규화하여 가중치를 적용합니다.
+    Loss = Weight * (Error_Ratio)^2
     """
-    power_penalty = max(0, weights["TARGET_POWER_MW"] - power_roi)
+    target_power = weights["TARGET_POWER_MW"]
 
-    pen_uni_overall = 1.0 - uni_overall
-    pen_uni_center = 1.0 - uni_center
-    pen_uni_white = 1.0 - uni_white
+    # 1. Power Penalty (Normalized Squared Error)
+    # 목표보다 적을 때만 페널티. (목표 - 현재) / 목표 = 부족한 비율 (0.0 ~ 1.0)
+    if power_roi < target_power:
+        power_error_ratio = (target_power - power_roi) / target_power
+    else:
+        power_error_ratio = 0.0  # 목표 달성 시 페널티 없음 (오히려 좋을 수도 있음)
 
-    loss = (
-        weights["W_POWER"] * power_penalty
-        + weights["W_UNIFORMITY_OVERALL"] * pen_uni_overall
-        + weights["W_UNIFORMITY_CENTER"] * pen_uni_center
-        + weights["W_UNIFORMITY_WHITE"] * pen_uni_white
-        + crosstalk_penalty
-    )
+    # 오차가 커질수록 페널티를 급격하게 주기 위해 제곱(Square) 사용
+    power_penalty = weights["W_POWER"] * (power_error_ratio**2)
+
+    # 2. Uniformity Penalties (Normalized Squared Error)
+    # 균일도는 1.0이 목표이므로, (1.0 - Uniformity) 자체가 오차 비율임
+    pen_uni_overall = weights["W_UNIFORMITY_UV"] * ((1.0 - uni_overall) ** 2)
+    pen_uni_center = weights["W_UNIFORMITY_CENTER"] * ((1.0 - uni_center) ** 2)
+    pen_uni_white = weights["W_UNIFORMITY_WHITE"] * ((1.0 - uni_white) ** 2)
+
+    # 3. Total Loss Summation
+    loss = power_penalty + pen_uni_overall + pen_uni_center + pen_uni_white
 
     return loss, power_penalty, pen_uni_overall, pen_uni_center
 

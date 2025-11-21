@@ -84,6 +84,63 @@ def setup_parameters(config):
 # ======================================================================================
 # 2. 메인 최적화 실행
 # ======================================================================================
+def plot_pareto_frontier(results_df, output_dir, timestamp):
+    """
+    Power vs Uniformity 관계를 산점도로 시각화하여 Trade-off를 분석합니다.
+    Color는 Total Loss를 나타냅니다.
+    """
+    if results_df.empty:
+        return
+
+    plt.figure(figsize=(10, 7))
+
+    # X축: Power, Y축: Overall Uniformity, Color: Total Loss (낮을수록 좋음)
+    # cmap='viridis_r' : 노란색(낮은 Loss, 좋음) -> 보라색(높은 Loss, 나쁨)
+    scatter = plt.scatter(
+        results_df["Pwr_UV_mW"],
+        results_df["Uni_UV_All"],
+        c=results_df["Total_Loss"],
+        cmap="viridis_r",
+        alpha=0.7,
+        edgecolors="k",
+        s=50,
+    )
+
+    plt.colorbar(scatter, label="Total Loss (Lower(Yellow) is Better)")
+    plt.xlabel("UV ROI Power (mW)")
+    plt.ylabel("UV Overall Uniformity")
+    plt.title("Pareto Frontier Analysis: Power vs Uniformity")
+    plt.grid(True, which="both", linestyle="--", alpha=0.5)
+
+    # 최적점(Loss 최소) 표시
+    best_idx = results_df["Total_Loss"].idxmin()
+    best_row = results_df.loc[best_idx]
+    plt.scatter(
+        best_row["Pwr_UV_mW"],
+        best_row["Uni_UV_All"],
+        c="red",
+        s=150,
+        # marker="*",ㄴ
+        label="Best Config",
+    )
+
+    # 텍스트로 최적점 정보 표시
+    plt.text(
+        best_row["Pwr_UV_mW"],
+        best_row["Uni_UV_All"],
+        f"  Best\n  (a={best_row['a_mm']}, b={best_row['b_mm']})",
+        color="red",
+        fontweight="bold",
+    )
+
+    plt.legend()
+    plt.tight_layout()
+    save_path = os.path.join(output_dir, f"{timestamp}_pareto_frontier.png")
+    plt.savefig(save_path)
+    print(f"Pareto Frontier plot saved to: {save_path}")
+    plt.show()
+
+
 def run_optimization_sweep(params):
     config = params["config"]
     beam_func = params["beam_func"]
@@ -155,55 +212,43 @@ def run_optimization_sweep(params):
         if not uv_led_positions:
             continue
 
-        # 2. White LED 배치 검사 (Crosstalk)
+        # 2. White LED 배치 검사 (Hard Constraint)
         white_led_positions, crosstalk_penalty = led_sim.place_white_leds_fixed_xaxis(
             uv_led_positions,
             white_x_offset,
             num_white,
             min_crosstalk_dist,
-            loss_weights["W_CROSSTALK"],
+            0,  # Penalty 값은 이제 안 씀
         )
 
-        # 3. Loss 계산
-        is_crosstalk = crosstalk_penalty > 0
+        # [UPDATE] Crosstalk 발생 시 아예 탈락시킴 (Hard Constraint)
+        if len(white_led_positions) < num_white:
+            continue  # Skip this configuration
 
-        if is_crosstalk:
-            # 배치가 불가능하면 조도 계산 스킵 (최악의 점수)
-            power_uv, uni_uv_all, uni_uv_cen = 0.0, 0.0, 0.0
-            current_white_uni = 0.0  # 배치 못했으므로 0점
-            print_status = "NO"
-        else:
-            # UV 시뮬레이션 (면 광원)
-            X_mm, Y_mm, uv_illum_map = led_sim.simulate_illumination(
-                uv_led_positions,
-                beam_func,
-                actual_dist,
-                grid_size,
-                resolution,
-                led_geom_params=led_geom,
-            )
-            power_uv, uni_uv_all, uni_uv_cen, _ = led_sim.analyze_roi(
-                X_mm,
-                Y_mm,
-                uv_illum_map,
-                roi_w,
-                roi_h,
-                single_power_mw,
-                num_uv,
-                center_ratio,
-            )
-            # 배치가 성공했으므로 미리 계산해둔 White Uniformity 점수 부여
-            current_white_uni = white_uni_all
-            print_status = "OK"
+        # 3. 시뮬레이션 수행
+        X_mm, Y_mm, uv_illum_map = led_sim.simulate_illumination(
+            uv_led_positions,
+            beam_func,
+            actual_dist,
+            grid_size,
+            resolution,
+            led_geom_params=led_geom,
+        )
+        power_uv, uni_uv_all, uni_uv_cen, _ = led_sim.analyze_roi(
+            X_mm,
+            Y_mm,
+            uv_illum_map,
+            roi_w,
+            roi_h,
+            single_power_mw,
+            num_uv,
+            center_ratio,
+        )
 
-        # [NEW] 종합 Loss 계산 (Center, White 포함)
+        # 4. Loss 계산 (정규화된 방식)
+        # calculate_loss 함수 인자에서 crosstalk_penalty 제거됨
         total_loss, p_pen, u_all_pen, u_cen_pen = led_sim.calculate_loss(
-            power_uv,
-            uni_uv_all,
-            uni_uv_cen,
-            current_white_uni,
-            crosstalk_penalty,
-            loss_weights,
+            power_uv, uni_uv_all, uni_uv_cen, white_uni_all, loss_weights
         )
 
         results_list.append(
@@ -212,17 +257,18 @@ def run_optimization_sweep(params):
                 "b_mm": round(b, 2),
                 "Pwr_UV_mW": round(power_uv, 2),
                 "Uni_UV_All": round(uni_uv_all, 3),
-                "Uni_UV_Cen": round(uni_uv_cen, 3),  # [NEW]
-                "Uni_White": round(current_white_uni, 3),  # [NEW]
-                "White_Valid": not is_crosstalk,
-                "Total_Loss": round(total_loss, 2),
+                "Uni_UV_Cen": round(uni_uv_cen, 3),
+                "Total_Loss": round(
+                    total_loss, 4
+                ),  # Loss가 작아질 수 있으므로 소수점 늘림
+                "Valid": True,
             }
         )
 
         # 진행 상황 출력 (100개마다)
         if idx % 100 == 0:
             print(
-                f"({idx}/{total_combinations}) a={a:.1f}, b={b:.1f} -> Loss={total_loss:.1f}"
+                f"({idx}/{total_combinations}) a={a:.2f}, b={b:.2f} -> Loss={total_loss:.4f}"
             )
 
     return results_list, white_illum_map  # 시각화를 위해 화이트 맵도 반환
@@ -246,6 +292,8 @@ def analyze_and_plot_results(results_list, white_illum_map_ref, params):
     best_config = results_df_sorted.iloc[0]
     print("\n--- Best Configuration ---")
     print(best_config)
+
+    plot_pareto_frontier(results_df_sorted, output_dir, timestamp)
 
     best_a = best_config["a_mm"]
     best_b = best_config["b_mm"]

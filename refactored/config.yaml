@@ -19,20 +19,20 @@ scenario:
   # actual_led_object_distance_mm: 3.6 # 6.0 - 0.1 - 2.3
 
   # --- 시나리오 B ---
-  # type: 'B'
-  # led_thickness_mm: 1.5
-  # other_parts_thickness_mm: 0.1
-  # camera_insertion_depth_mm: 1.0
-  # cavity_width_mm: 11.06
-  # cavity_height_mm: 10.81
-  # actual_led_object_distance_mm: 5.6 # 6.0 + 1.0 - 1.5
+  type: 'B'
+  led_thickness_mm: 1.5
+  other_parts_thickness_mm: 0.1
+  camera_insertion_depth_mm: 1.0
+  cavity_width_mm: 11.06
+  cavity_height_mm: 10.81
+  actual_led_object_distance_mm: 5.6 # 6.0 + 1.0 - 1.5
 
-  # --- Preset Original ---
-  type: 'Original'
-  led_thickenss_mm: 1.5
-  actual_led_object_distance_mm: 4.5 # 6.0 - 1.5
-  cavity_width_mm: 6.45
-  cavity_height_mm: 3.63
+  # # --- Preset Original ---
+  # type: 'Original'
+  # led_thickenss_mm: 1.5
+  # actual_led_object_distance_mm: 4.5 # 6.0 - 1.5
+  # cavity_width_mm: 6.45
+  # cavity_height_mm: 3.63
   # (a,b) = (1.53, 5.01)
 
 # --- LED 특성 ---
@@ -57,29 +57,30 @@ white_led:
 
 # --- 시뮬레이션 정밀도 ---
 simulation:
-  resolution: 1000
+  resolution: 200
   grid_size_mm: 30
   mm_per_m: 1000.0
 
 # --- 최적화 파라미터 탐색 범위 ---
 optimization_ranges:
-  # a_range: {start: 1.0, stop: 8.1, step: 2.0}
-  # b_range: {start: 5.4, stop: 9.1, step: 2.0}
+  a_range: {start: 1.0, stop: 8.1, step: 0.2}
+  b_range: {start: 5.4, stop: 9.1, step: 0.2}
   
-  # for Preset Original
-  a_range: {start: 1.53, stop: 8.1, step: 100.0}
-  b_range: {start: 5.01, stop: 9.1, step: 100.0}
+  # # for Preset Original
+  # a_range: {start: 1.53, stop: 8.1, step: 100.0}
+  # b_range: {start: 5.01, stop: 9.1, step: 100.0}
 
 # --- Loss Function 가중치 (W_COUNT 제거) ---
 loss_weights:
   TARGET_POWER_MW: 34.0
-  # [UPDATED] 가중치 세분화
+
   W_POWER: 100.0
-  W_UNIFORMITY_OVERALL: 500.0 # 전체 영역 균일도
-  W_UNIFORMITY_CENTER: 100.0 # [NEW] 중앙부 균일도 (가중치 높음)
-  W_UNIFORMITY_WHITE: 200.0   # [NEW] White LED 균일도
+  W_UNIFORMITY_UV: 500.0 # 전체 영역 균일도
+  W_UNIFORMITY_CENTER: 1000.0 # 중앙부 균일도
+  W_UNIFORMITY_WHITE: 200.0   # White LED 균일도
   
-  W_CROSSTALK: 100000000        # 배치 불가능 시 강력한 패널티
+  # Hard constraint -> Pass/Fail로 변경
+  # W_CROSSTALK: 10000000        # 배치 불가능 시 강력한 패널티 
   # W_center uniformity or/and center power: 가운데가 늘 어두워서 가운데가 좀 밝아지도록 되면 좋겠어.
   
 
