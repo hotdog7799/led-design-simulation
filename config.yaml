@@ -63,8 +63,8 @@ simulation:
 
 # --- 최적화 파라미터 탐색 범위 ---
 optimization_ranges:
-  a_range: {start: 1.0, stop: 8.1, step: 0.5}
-  b_range: {start: 5.4, stop: 9.1, step: 0.5}
+  a_range: {start: 1.0, stop: 8.1, step: 5}
+  b_range: {start: 5.4, stop: 9.1, step: 5}
   
   # # for Preset Original
   # a_range: {start: 1.53, stop: 8.1, step: 100.0}

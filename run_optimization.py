@@ -62,21 +62,28 @@ def calculate_benchmark_scores(params):
     print("\n--- Calculating Benchmark Scores for Comparison ---")
     
     for name, leds in BENCHMARK_PRESETS.items():
-        # 시뮬레이션
-        _, _, uv_map = led_sim.simulate_illumination(leds["uv"], beam_func, actual_dist, grid_size, resolution, led_geom_params=led_geom)
-        _, _, white_map = led_sim.simulate_illumination(leds["white"], beam_func, actual_dist, grid_size, resolution, led_geom_params=led_geom)
+        # [FIX] X, Y 좌표를 제대로 받아옵니다 (밑줄 _ 대신 변수에 할당)
+        X, Y, uv_map = led_sim.simulate_illumination(
+            leds["uv"], beam_func, actual_dist, grid_size, resolution, led_geom_params=led_geom
+        )
+        # White도 마찬가지로 좌표를 받아옵니다 (X, Y는 동일하므로 덮어써도 무방)
+        _, _, white_map = led_sim.simulate_illumination(
+            leds["white"], beam_func, actual_dist, grid_size, resolution, led_geom_params=led_geom
+        )
         
-        # 분석
-        p_uv, cp_uv, u_uv, uc_uv, _ = led_sim.analyze_roi(np.zeros((1,1)), np.zeros((1,1)), uv_map, roi_w, roi_h, single_power_mw, len(leds["uv"]), center_ratio)
-        _, _, u_wh, _, _ = led_sim.analyze_roi(np.zeros((1,1)), np.zeros((1,1)), white_map, roi_w, roi_h, single_power_mw, len(leds["white"]), center_ratio)
-        # analyze_roi의 X, Y는 scale_factor 계산 외엔 마스크용인데, 이미 map이 나왔으므로 임의값 넣어도 돌아가긴 하나... 
-        # 정확성을 위해 simulate_illumination에서 X, Y를 받아오는 게 정석.
-        # 위 코드에서 X, Y는 simulate_illumination 리턴값으로 덮어써지므로 수정함:
-        X, Y, uv_map = led_sim.simulate_illumination(leds["uv"], beam_func, actual_dist, grid_size, resolution, led_geom_params=led_geom)
-        p_uv, cp_uv, u_uv, uc_uv, _ = led_sim.analyze_roi(X, Y, uv_map, roi_w, roi_h, single_power_mw, len(leds["uv"]), center_ratio)
+        # [FIX] analyze_roi에 np.zeros 대신 실제 X, Y를 전달합니다.
+        p_uv, cp_uv, u_uv, uc_uv, _ = led_sim.analyze_roi(
+            X, Y, uv_map, roi_w, roi_h, single_power_mw, len(leds["uv"]), center_ratio
+        )
         
-        # Loss
-        total_loss, _, _, _ = led_sim.calculate_loss(p_uv, cp_uv, u_uv, uc_uv, u_wh, loss_weights, center_ratio)
+        _, _, u_wh, _, _ = led_sim.analyze_roi(
+            X, Y, white_map, roi_w, roi_h, single_power_mw, len(leds["white"]), center_ratio
+        )
+        
+        # Loss 계산
+        total_loss, _, _, _ = led_sim.calculate_loss(
+            p_uv, cp_uv, u_uv, uc_uv, u_wh, loss_weights, center_ratio
+        )
         
         benchmark_results.append({
             "Name": name,
@@ -146,7 +153,7 @@ def setup_parameters(config):
 # ======================================================================================
 # 2. 메인 최적화 실행
 # ======================================================================================
-def plot_pareto_frontier(results_df, output_dir, timestamp):
+def plot_pareto_frontier(results_df, output_dir, timestamp, benchmark_df=None):
     """
     Power vs Uniformity 관계를 산점도로 시각화하여 Trade-off를 분석합니다.
     Color는 Total Loss를 나타냅니다.
@@ -172,7 +179,7 @@ def plot_pareto_frontier(results_df, output_dir, timestamp):
     plt.colorbar(scatter, label="Total Loss (Lower(Yellow) is Better)")
 
     # 2. Benchmark Overlay (Blue Squares)
-    if benchmark_df is not None and not benchmark_df.empty:
+    if benchmark_df is not None:#and not benchmark_df.empty
         plt.scatter(
             benchmark_df['Pwr_UV'], 
             benchmark_df['Uni_UV'], 
@@ -189,7 +196,7 @@ def plot_pareto_frontier(results_df, output_dir, timestamp):
             plt.text(
                 row['Pwr_UV'], 
                 row['Uni_UV'], 
-                f"  {row['Name']}", 
+                f"  {row['Name']}\n    ({row['Total_Loss']:.1f})", 
                 color='blue', 
                 fontsize=9,
                 fontweight='bold',
@@ -202,7 +209,8 @@ def plot_pareto_frontier(results_df, output_dir, timestamp):
     plt.text(
         best_row['Pwr_UV'], 
         best_row['Uni_UV'], 
-        f"  Best\n  (Loss={best_row['Total_Loss']:.1f})", 
+        f"  Best (Loss={best_row['Total_Loss']:.1f})", 
+        # "Best",
         color='red', 
         fontweight='bold'
     )
@@ -211,14 +219,14 @@ def plot_pareto_frontier(results_df, output_dir, timestamp):
     plt.title("Pareto Frontier Analysis: Power vs Uniformity")
     plt.grid(True, which="both", linestyle="--", alpha=0.5)
 
-    # 텍스트로 최적점 정보 표시
-    plt.text(
-        best_row["Pwr_UV"],
-        best_row["Uni_UV"],
-        f"  Best\n  (a={best_row['a_mm']}, b={best_row['b_mm']})",
-        color="red",
-        fontweight="bold",
-    )
+    # # 텍스트로 최적점 정보 표시
+    # plt.text(
+    #     best_row["Pwr_UV"],
+    #     best_row["Uni_UV"],
+    #     f"  Best\n  (a={best_row['a_mm']}, b={best_row['b_mm']})",
+    #     color="red",
+    #     fontweight="bold",
+    # )
 
     plt.legend()
     plt.tight_layout()
@@ -372,7 +380,7 @@ def analyze_and_plot_results(results_list, _, params): # white_illum_map_ref 인
     # [NEW] 파레토 차트에 벤치마크 전달
     plot_pareto_frontier(results_df_sorted, output_dir, timestamp, benchmark_df=benchmark_df)
     # 1. 파레토 차트 그리기
-    plot_pareto_frontier(results_df_sorted, output_dir, timestamp)
+    # plot_pareto_frontier(results_df_sorted, output_dir, timestamp)
     
     # 2. 최적 설정으로 시각화 재구성
     best_a = best_config["a_mm"]
@@ -426,7 +434,7 @@ def analyze_and_plot_results(results_list, _, params): # white_illum_map_ref 인
     )
 
     # (5) Plotting
-    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    fig, axes = plt.subplots(1, 2, figsize=(12, 6))
     plot_params = {
         "roi_w": config["optics"]["roi_width_mm"], 
         "roi_h": config["optics"]["roi_height_mm"],
@@ -445,12 +453,12 @@ def analyze_and_plot_results(results_list, _, params): # white_illum_map_ref 인
                                 {"power": p_wh, "uni_all": u_wh, "uni_cen": uc_wh}, "White Light Only", led_geom_params=led_geom)
     
     # Combined Plot
-    combined_map = uv_map + white_map
-    p_comb, cp_comb, u_comb, uc_comb, _ = led_sim.analyze_roi(X, Y, combined_map, config["optics"]["roi_width_mm"], config["optics"]["roi_height_mm"], 
-                                                            config["led_specs"]["single_led_total_power_mw"], len(uv_leds)+len(white_leds), config["optics"]["center_roi_ratio"])
+    # combined_map = uv_map + white_map
+    # p_comb, cp_comb, u_comb, uc_comb, _ = led_sim.analyze_roi(X, Y, combined_map, config["optics"]["roi_width_mm"], config["optics"]["roi_height_mm"], 
+    #                                                         config["led_specs"]["single_led_total_power_mw"], len(uv_leds)+len(white_leds), config["optics"]["center_roi_ratio"])
     
-    led_sim.plot_irradiance_map(axes[2], combined_map, extent, plot_params, uv_leds, white_leds,
-                                {"power": p_comb, "uni_all": u_comb, "uni_cen": uc_comb}, "Combined (UV + White)", led_geom_params=led_geom)
+    # led_sim.plot_irradiance_map(axes[2], combined_map, extent, plot_params, uv_leds, white_leds,
+    #                             {"power": p_comb, "uni_all": u_comb, "uni_cen": uc_comb}, "Combined (UV + White)", led_geom_params=led_geom)
 
     # plt.tight_layout()
     plt.savefig(os.path.join(output_dir, f"{timestamp}_result_maps.png"))
