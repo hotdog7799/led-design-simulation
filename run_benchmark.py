@@ -27,7 +27,7 @@ presets = {
 def evaluate_presets():
     print("=== Starting Benchmark Evaluation ===")
     
-    # 1. 설정 로드 (run_optimization.py의 함수 재사용)
+    # 1. 설정 로드
     config = opt_main.load_config("config.yaml")
     params = opt_main.setup_parameters(config)
     
@@ -68,10 +68,10 @@ def evaluate_presets():
         p_wh, cp_wh, u_wh, uc_wh, _ = led_sim.analyze_roi(X, Y, white_map, roi_w, roi_h, single_power_mw, len(white_pos), center_ratio)
         
         # Loss 계산
-        total_loss, p_loss, cp_loss, u_loss = led_sim.calculate_loss(p_uv, cp_uv, u_uv, uc_uv, u_wh, loss_weights, center_ratio)
+        total_loss, _, _, _ = led_sim.calculate_loss(p_uv, cp_uv, u_uv, uc_uv, u_wh, loss_weights, center_ratio)
         
         print(f"  -> Total Loss: {total_loss:.4f}")
-        print(f"  -> UV Power: {p_uv:.2f}mW (Center: {cp_uv:.2f}mW), Uniformity: {u_uv:.3f}")
+        print(f"  -> UV Power: {p_uv:.2f}mW, Uniformity: {u_uv:.3f}")
         
         results.append({
             "Name": name,
@@ -81,7 +81,7 @@ def evaluate_presets():
         })
         
         # 플로팅 (결과 저장)
-        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+        fig, axes = plt.subplots(1, 2, figsize=(12, 6))
         plot_params = {
             "roi_w": roi_w, "roi_h": roi_h,
             "cavity_w": params["cavity_w"], "cavity_h": params["cavity_h"],
@@ -89,23 +89,23 @@ def evaluate_presets():
         }
         extent = [-grid_size/2, grid_size/2, -grid_size/2, grid_size/2]
         
+        # 1. UV Plot
         led_sim.plot_irradiance_map(axes[0], uv_map, extent, plot_params, uv_pos, [], 
                                     {"power": p_uv, "uni_all": u_uv, "uni_cen": uc_uv}, f"{name} - UV", led_geom_params=led_geom)
+        
+        # 2. White Plot
         led_sim.plot_irradiance_map(axes[1], white_map, extent, plot_params, [], white_pos,
                                     {"power": p_wh, "uni_all": u_wh, "uni_cen": uc_wh}, f"{name} - White", led_geom_params=led_geom)
         
-        combined_map = uv_map + white_map
-        p_comb, _, u_comb, uc_comb, _ = led_sim.analyze_roi(X, Y, combined_map, roi_w, roi_h, single_power_mw, len(uv_pos)+len(white_pos), center_ratio)
+        # 3. Combined Plot
+        # combined_map = uv_map + white_map
+        # p_comb, _, u_comb, uc_comb, _ = led_sim.analyze_roi(X, Y, combined_map, roi_w, roi_h, single_power_mw, len(uv_pos)+len(white_pos), center_ratio)
         
-        led_sim.plot_irradiance_map(axes[2],
-         combined_map,
-          extent,
-          plot_params,
-           uv_pos,
-            white_pos,
-                                    {"power": p_comb, "uni_all": u_comb, "uni_cen": uc_comb}, f"{name} - Combined", led_geom_params=led_geom)
+        # [FIXED] plot_params 인자 추가됨
+        # led_sim.plot_irradiance_map(axes[2], combined_map, extent, plot_params, uv_pos, white_pos,
+        #                             {"power": p_comb, "uni_all": u_comb, "uni_cen": uc_comb}, f"{name} - Combined", led_geom_params=led_geom)
         
-        plt.tight_layout()
+        # plt.tight_layout()
         plt.savefig(os.path.join(output_dir, f"{timestamp}_{name}.png"))
         plt.close()
 
@@ -114,7 +114,6 @@ def evaluate_presets():
     csv_path = os.path.join(output_dir, f"{timestamp}_benchmark_results.csv")
     df.to_csv(csv_path, index=False)
     print(f"\nBenchmark completed. Results saved to {csv_path}")
-    print(df)
 
 if __name__ == "__main__":
     evaluate_presets()

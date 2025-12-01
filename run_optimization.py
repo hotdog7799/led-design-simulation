@@ -23,6 +23,68 @@ except ImportError:
     print("Please make sure both scripts are in the same directory.")
     sys.exit(1)
 
+BENCHMARK_PRESETS = {
+    "Original": {
+        "uv": [np.array([1.53, 5.01, 0]), np.array([-1.53, 5.01, 0]), 
+               np.array([-1.53, -5.01, 0]), np.array([1.53, -5.01, 0])],
+        "white": [np.array([6.50, 0, 0]), np.array([-6.50, 0, 0])]
+    },
+    "LED 1": {
+        "uv": [np.array([4.43, 1.25, 0]), np.array([-1.55, 5.05, 0]), 
+               np.array([-4.43, -1.25, 0]), np.array([1.55, -5.05, 0])],
+        "white": [np.array([1.55, 5.05, 0]), np.array([-4.43, 1.25, 0]), 
+                  np.array([-1.55, -5.05, 0]), np.array([4.43, -1.25, 0])]
+    }
+}
+
+# [NEW] 벤치마크 점수 계산 함수
+def calculate_benchmark_scores(params):
+    """현재 파라미터(Loss Weight 등)를 기준으로 벤치마크 모델들의 점수를 계산합니다."""
+    config = params["config"]
+    beam_func = params["beam_func"]
+    actual_dist = params["actual_dist"]
+    grid_size = config["simulation"]["grid_size_mm"]
+    resolution = config["simulation"]["resolution"]
+    roi_w = config["optics"]["roi_width_mm"]
+    roi_h = config["optics"]["roi_height_mm"]
+    center_ratio = config["optics"]["center_roi_ratio"]
+    single_power_mw = config["led_specs"]["single_led_total_power_mw"]
+    loss_weights = config["loss_weights"]
+    
+    led_geom = {
+        "led_width_mm": config["led_specs"]["led_width_mm"],
+        "led_height_mm": config["led_specs"]["led_height_mm"],
+        "subsample_x": config["led_specs"]["subsample_x"],
+        "subsample_y": config["led_specs"]["subsample_y"],
+    }
+    
+    benchmark_results = []
+    print("\n--- Calculating Benchmark Scores for Comparison ---")
+    
+    for name, leds in BENCHMARK_PRESETS.items():
+        # 시뮬레이션
+        _, _, uv_map = led_sim.simulate_illumination(leds["uv"], beam_func, actual_dist, grid_size, resolution, led_geom_params=led_geom)
+        _, _, white_map = led_sim.simulate_illumination(leds["white"], beam_func, actual_dist, grid_size, resolution, led_geom_params=led_geom)
+        
+        # 분석
+        p_uv, cp_uv, u_uv, uc_uv, _ = led_sim.analyze_roi(np.zeros((1,1)), np.zeros((1,1)), uv_map, roi_w, roi_h, single_power_mw, len(leds["uv"]), center_ratio)
+        _, _, u_wh, _, _ = led_sim.analyze_roi(np.zeros((1,1)), np.zeros((1,1)), white_map, roi_w, roi_h, single_power_mw, len(leds["white"]), center_ratio)
+        # analyze_roi의 X, Y는 scale_factor 계산 외엔 마스크용인데, 이미 map이 나왔으므로 임의값 넣어도 돌아가긴 하나... 
+        # 정확성을 위해 simulate_illumination에서 X, Y를 받아오는 게 정석.
+        # 위 코드에서 X, Y는 simulate_illumination 리턴값으로 덮어써지므로 수정함:
+        X, Y, uv_map = led_sim.simulate_illumination(leds["uv"], beam_func, actual_dist, grid_size, resolution, led_geom_params=led_geom)
+        p_uv, cp_uv, u_uv, uc_uv, _ = led_sim.analyze_roi(X, Y, uv_map, roi_w, roi_h, single_power_mw, len(leds["uv"]), center_ratio)
+        
+        # Loss
+        total_loss, _, _, _ = led_sim.calculate_loss(p_uv, cp_uv, u_uv, uc_uv, u_wh, loss_weights, center_ratio)
+        
+        benchmark_results.append({
+            "Name": name,
+            "Pwr_UV": p_uv, "Uni_UV": u_uv, "Total_Loss": total_loss
+        })
+        print(f"  [{name}] Loss: {total_loss:.2f} (Pwr={p_uv:.1f}, Uni={u_uv:.3f})")
+        
+    return pd.DataFrame(benchmark_results)
 
 # ======================================================================================
 # 1. 설정 파일 로드 및 파라미터 재구성
@@ -104,25 +166,50 @@ def plot_pareto_frontier(results_df, output_dir, timestamp):
         alpha=0.7,
         edgecolors="k",
         s=50,
+        label="Optimization Candidates",
     )
 
     plt.colorbar(scatter, label="Total Loss (Lower(Yellow) is Better)")
+
+    # 2. Benchmark Overlay (Blue Squares)
+    if benchmark_df is not None and not benchmark_df.empty:
+        plt.scatter(
+            benchmark_df['Pwr_UV'], 
+            benchmark_df['Uni_UV'], 
+            c='blue', 
+            marker='s', # Square
+            s=100, 
+            label='Benchmarks',
+            edgecolors='white',
+            linewidth=1.5,
+            zorder=10 # 맨 위에 그리기
+        )
+        # 텍스트 라벨 추가
+        for _, row in benchmark_df.iterrows():
+            plt.text(
+                row['Pwr_UV'], 
+                row['Uni_UV'], 
+                f"  {row['Name']}", 
+                color='blue', 
+                fontsize=9,
+                fontweight='bold',
+                ha='left', va='center'
+            )
+    # 3. Best Config (Red Star)
+    best_idx = results_df['Total_Loss'].idxmin()
+    best_row = results_df.loc[best_idx]
+    plt.scatter(best_row['Pwr_UV'], best_row['Uni_UV'], c='red', s=150, marker='*', label='Best Config', zorder=10)
+    plt.text(
+        best_row['Pwr_UV'], 
+        best_row['Uni_UV'], 
+        f"  Best\n  (Loss={best_row['Total_Loss']:.1f})", 
+        color='red', 
+        fontweight='bold'
+    )
     plt.xlabel("UV ROI Power (mW)")
     plt.ylabel("UV Overall Uniformity")
     plt.title("Pareto Frontier Analysis: Power vs Uniformity")
     plt.grid(True, which="both", linestyle="--", alpha=0.5)
-
-    # 최적점(Loss 최소) 표시
-    best_idx = results_df["Total_Loss"].idxmin()
-    best_row = results_df.loc[best_idx]
-    plt.scatter(
-        best_row["Pwr_UV"],
-        best_row["Uni_UV"],
-        c="red",
-        s=150,
-        # marker="*",ㄴ
-        label="Best Config",
-    )
 
     # 텍스트로 최적점 정보 표시
     plt.text(
@@ -219,7 +306,8 @@ def run_optimization_sweep(params):
         # White 배치 실패(개수 부족) 시 Skip (Hard Constraint)
         if len(white_led_positions) < num_white_target:
             continue 
-
+        # [NEW] White LED 좌표를 문자열로 변환하여 저장
+        white_pos_str = " | ".join([f"({p[0]:.1f}, {p[1]:.1f})" for p in white_led_positions])
         # 3. 시뮬레이션 (UV & White 각각 수행)
         # UV Map
         X, Y, uv_map = led_sim.simulate_illumination(
@@ -247,6 +335,7 @@ def run_optimization_sweep(params):
 
         results_list.append({
             "a_mm": a, "b_mm": b,
+            "White_Pos": white_pos_str, # [NEW] 결과에 추가
             "Pwr_UV": round(p_uv, 2),
             "Pwr_UV_Center": round(cp_uv, 2), # [중요] 로그 확인용
             "Uni_UV": round(u_uv, 3),
@@ -276,7 +365,12 @@ def analyze_and_plot_results(results_list, _, params): # white_illum_map_ref 인
     best_config = results_df_sorted.iloc[0]
     print("\n--- Best Configuration ---")
     print(best_config)
+    
+    # [NEW] 벤치마크 점수 계산
+    benchmark_df = calculate_benchmark_scores(params)
 
+    # [NEW] 파레토 차트에 벤치마크 전달
+    plot_pareto_frontier(results_df_sorted, output_dir, timestamp, benchmark_df=benchmark_df)
     # 1. 파레토 차트 그리기
     plot_pareto_frontier(results_df_sorted, output_dir, timestamp)
     
