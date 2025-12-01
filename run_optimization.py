@@ -97,8 +97,8 @@ def plot_pareto_frontier(results_df, output_dir, timestamp):
     # X축: Power, Y축: Overall Uniformity, Color: Total Loss (낮을수록 좋음)
     # cmap='viridis_r' : 노란색(낮은 Loss, 좋음) -> 보라색(높은 Loss, 나쁨)
     scatter = plt.scatter(
-        results_df["Pwr_UV_mW"],
-        results_df["Uni_UV_All"],
+        results_df["Pwr_UV"],
+        results_df["Uni_UV"],
         c=results_df["Total_Loss"],
         cmap="viridis_r",
         alpha=0.7,
@@ -116,8 +116,8 @@ def plot_pareto_frontier(results_df, output_dir, timestamp):
     best_idx = results_df["Total_Loss"].idxmin()
     best_row = results_df.loc[best_idx]
     plt.scatter(
-        best_row["Pwr_UV_mW"],
-        best_row["Uni_UV_All"],
+        best_row["Pwr_UV"],
+        best_row["Uni_UV"],
         c="red",
         s=150,
         # marker="*",ㄴ
@@ -126,8 +126,8 @@ def plot_pareto_frontier(results_df, output_dir, timestamp):
 
     # 텍스트로 최적점 정보 표시
     plt.text(
-        best_row["Pwr_UV_mW"],
-        best_row["Uni_UV_All"],
+        best_row["Pwr_UV"],
+        best_row["Uni_UV"],
         f"  Best\n  (a={best_row['a_mm']}, b={best_row['b_mm']})",
         color="red",
         fontweight="bold",
@@ -261,43 +261,46 @@ def run_optimization_sweep(params):
 # ======================================================================================
 # 3. 결과 분석 및 시각화
 # ======================================================================================
-def analyze_and_plot_results(results_list, white_illum_map_ref, params):
+def analyze_and_plot_results(results_list, _, params): # white_illum_map_ref 인자는 이제 안 씀(_)
     config = params["config"]
     if not results_list:
-        print("No valid results.")
+        print("No valid results found.")
         return
 
     results_df = pd.DataFrame(results_list)
     results_df_sorted = results_df.sort_values(by="Total_Loss").reset_index(drop=True)
-
-    # 결과 저장
+    
+    # 결과 CSV 저장
     results_df_sorted.to_csv(config["logging"]["results_file"], index=False)
-
+    
     best_config = results_df_sorted.iloc[0]
     print("\n--- Best Configuration ---")
     print(best_config)
 
+    # 1. 파레토 차트 그리기
     plot_pareto_frontier(results_df_sorted, output_dir, timestamp)
-
+    
+    # 2. 최적 설정으로 시각화 재구성
     best_a = best_config["a_mm"]
     best_b = best_config["b_mm"]
-
-    # 재구성 및 시각화 준비
+    
+    # (1) UV 배치 재현
     uv_leds = led_sim.create_4_symmetric_uv_layout(
-        best_a,
-        best_b,
-        params["cavity_w"],
-        params["cavity_h"],
-        config["led_specs"]["min_led_separation_mm"],
+        best_a, best_b, params["cavity_w"], params["cavity_h"], config["led_specs"]["min_led_separation_mm"]
     )
-    white_leds, _ = led_sim.place_white_leds_fixed_xaxis(
-        uv_leds,
-        config["white_led"]["x_offset_mm"],
-        config["white_led"]["num_to_place"],
-        config["white_led"]["crosstalk_min_distance_mm"],
-        0,
+    
+    # (2) [중요] White LED 배치 재현 (여기서 다시 최적화를 돌려야 함!)
+    # Optimization Loop에서 했던 것과 똑같은 함수를 호출해서 위치를 찾아냅니다.
+    white_leds, _ = led_sim.optimize_white_leds_radial(
+        uv_leds, 
+        params["cavity_w"], 
+        params["cavity_h"], 
+        config["white_led"]["num_to_place"], 
+        config["white_led"]["crosstalk_min_distance_mm"], 
+        0 # 페널티는 시각화에 필요 없으므로 0
     )
 
+    # 면 광원 설정 준비
     led_geom = {
         "led_width_mm": config["led_specs"]["led_width_mm"],
         "led_height_mm": config["led_specs"]["led_height_mm"],
@@ -305,113 +308,59 @@ def analyze_and_plot_results(results_list, white_illum_map_ref, params):
         "subsample_y": config["led_specs"]["subsample_y"],
     }
 
-    # UV Map 재생성
+    # (3) 시뮬레이션 다시 수행 (맵 생성)
+    # UV Map
     X, Y, uv_map = led_sim.simulate_illumination(
-        uv_leds,
-        params["beam_func"],
-        params["actual_dist"],
-        config["simulation"]["grid_size_mm"],
-        config["simulation"]["resolution"],
-        led_geom_params=led_geom,
+        uv_leds, params["beam_func"], params["actual_dist"], 
+        config["simulation"]["grid_size_mm"], config["simulation"]["resolution"], led_geom_params=led_geom
+    )
+    
+    # White Map (재계산된 위치로 생성)
+    _, _, white_map = led_sim.simulate_illumination(
+        white_leds, params["beam_func"], params["actual_dist"], 
+        config["simulation"]["grid_size_mm"], config["simulation"]["resolution"], led_geom_params=led_geom
+    )
+    
+    # (4) 통계 재계산 (타이틀 표시용)
+    p_uv, cp_uv, u_uv, uc_uv, _ = led_sim.analyze_roi(
+        X, Y, uv_map, config["optics"]["roi_width_mm"], config["optics"]["roi_height_mm"], 
+        config["led_specs"]["single_led_total_power_mw"], len(uv_leds), config["optics"]["center_roi_ratio"]
+    )
+    p_wh, cp_wh, u_wh, uc_wh, _ = led_sim.analyze_roi(
+        X, Y, white_map, config["optics"]["roi_width_mm"], config["optics"]["roi_height_mm"], 
+        config["led_specs"]["single_led_total_power_mw"], len(white_leds), config["optics"]["center_roi_ratio"]
     )
 
-    # 통계 다시 계산
-    p_uv, u_uv_all, u_uv_cen, scale = led_sim.analyze_roi(
-        X,
-        Y,
-        uv_map,
-        config["optics"]["roi_width_mm"],
-        config["optics"]["roi_height_mm"],
-        config["led_specs"]["single_led_total_power_mw"],
-        len(uv_leds),
-        config["optics"]["center_roi_ratio"],
-    )
-
-    # White 통계
-    p_wh, u_wh_all, u_wh_cen, _ = led_sim.analyze_roi(
-        X,
-        Y,
-        white_illum_map_ref,
-        config["optics"]["roi_width_mm"],
-        config["optics"]["roi_height_mm"],
-        config["led_specs"]["single_led_total_power_mw"],
-        len(white_leds),
-        config["optics"]["center_roi_ratio"],
-    )
-
-    # [PLOT] 1x3 서브플롯 (UV / White / Combined)
-    fig, axes = plt.subplots(1, 2, figsize=(12, 6))
-
+    # (5) Plotting
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
     plot_params = {
-        "roi_w": config["optics"]["roi_width_mm"],
+        "roi_w": config["optics"]["roi_width_mm"], 
         "roi_h": config["optics"]["roi_height_mm"],
-        "cavity_w": params["cavity_w"],
-        "cavity_h": params["cavity_h"],
-        "center_ratio": config["optics"]["center_roi_ratio"],
+        "cavity_w": params["cavity_w"], "cavity_h": params["cavity_h"],
+        "center_ratio": config["optics"]["center_roi_ratio"]
     }
-    extent = [
-        -config["simulation"]["grid_size_mm"] / 2,
-        config["simulation"]["grid_size_mm"] / 2,
-        -config["simulation"]["grid_size_mm"] / 2,
-        config["simulation"]["grid_size_mm"] / 2,
-    ]
+    extent = [-config["simulation"]["grid_size_mm"]/2, config["simulation"]["grid_size_mm"]/2, 
+              -config["simulation"]["grid_size_mm"]/2, config["simulation"]["grid_size_mm"]/2]
 
-    # 1. UV Plot
-    led_sim.plot_irradiance_map(
-        axes[0],
-        uv_map,
-        extent,
-        plot_params,
-        uv_leds,
-        [],
-        {"power": p_uv, "uni_all": u_uv_all, "uni_cen": u_uv_cen},
-        "UV Light Only",
-        led_geom_params=led_geom,
-    )
-
-    # 2. White Plot
-    led_sim.plot_irradiance_map(
-        axes[1],
-        white_illum_map_ref,
-        extent,
-        plot_params,
-        [],
-        white_leds,
-        {"power": p_wh, "uni_all": u_wh_all, "uni_cen": u_wh_cen},
-        "White Light Only",
-        led_geom_params=led_geom,
-    )
-
-    # 3. Combined Plot
-    # Don't need this one because we don't use the combined illumination simulatenously, moreover, it could be a littlebit helpful if the colormap of the radiance field was different, but nevermind. -from me
-    # combined_map = uv_map + white_illum_map_ref
-    # # Combined 통계
-    # p_comb, u_comb_all, u_comb_cen, _ = led_sim.analyze_roi(
-    #     X,
-    #     Y,
-    #     combined_map,
-    #     config["optics"]["roi_width_mm"],
-    #     config["optics"]["roi_height_mm"],
-    #     config["led_specs"]["single_led_total_power_mw"],
-    #     len(uv_leds) + len(white_leds),
-    #     config["optics"]["center_roi_ratio"],
-    # )
-
-    # led_sim.plot_irradiance_map(
-    #     axes[2],
-    #     combined_map,
-    #     extent,
-    #     plot_params,
-    #     uv_leds,
-    #     white_leds,
-    #     {"power": p_comb, "uni_all": u_comb_all, "uni_cen": u_comb_cen},
-    #     "Combined (UV + White)",
-    #     led_geom_params=led_geom,
-    # )
+    # UV Plot
+    led_sim.plot_irradiance_map(axes[0], uv_map, extent, plot_params, uv_leds, [], 
+                                {"power": p_uv, "uni_all": u_uv, "uni_cen": uc_uv}, "UV Light Only", led_geom_params=led_geom)
+    
+    # White Plot
+    led_sim.plot_irradiance_map(axes[1], white_map, extent, plot_params, [], white_leds,
+                                {"power": p_wh, "uni_all": u_wh, "uni_cen": uc_wh}, "White Light Only", led_geom_params=led_geom)
+    
+    # Combined Plot
+    combined_map = uv_map + white_map
+    p_comb, cp_comb, u_comb, uc_comb, _ = led_sim.analyze_roi(X, Y, combined_map, config["optics"]["roi_width_mm"], config["optics"]["roi_height_mm"], 
+                                                            config["led_specs"]["single_led_total_power_mw"], len(uv_leds)+len(white_leds), config["optics"]["center_roi_ratio"])
+    
+    led_sim.plot_irradiance_map(axes[2], combined_map, extent, plot_params, uv_leds, white_leds,
+                                {"power": p_comb, "uni_all": u_comb, "uni_cen": uc_comb}, "Combined (UV + White)", led_geom_params=led_geom)
 
     # plt.tight_layout()
     plt.savefig(os.path.join(output_dir, f"{timestamp}_result_maps.png"))
-    plt.show()
+    #
 
 
 # ======================================================================================
@@ -420,5 +369,5 @@ def analyze_and_plot_results(results_list, white_illum_map_ref, params):
 if __name__ == "__main__":
     config_data = load_config("config.yaml")
     sim_params = setup_parameters(config_data)
-    results, white_map_ref = run_optimization_sweep(sim_params)
-    analyze_and_plot_results(results, white_map_ref, sim_params)
+    results, _ = run_optimization_sweep(sim_params)
+    analyze_and_plot_results(results, None , sim_params)
