@@ -63,8 +63,8 @@ simulation:
 
 # --- 최적화 파라미터 탐색 범위 ---
 optimization_ranges:
-  a_range: {start: 1.0, stop: 8.1, step: 5}
-  b_range: {start: 5.4, stop: 9.1, step: 5}
+  a_range: {start: 1.0, stop: 12.1, step: 0.25}
+  b_range: {start: 5.4, stop: 12.1, step: 0.25}
   
   # # for Preset Original
   # a_range: {start: 1.53, stop: 8.1, step: 100.0}
@@ -75,8 +75,8 @@ loss_weights:
   TARGET_POWER_MW: 34.0
 
   W_POWER: 100.0
-  W_POWER_CENTER: 400.0
-  W_UNIFORMITY_OVERALL: 500.0 # 전체 영역 균일도
+  W_POWER_CENTER: 1500.0
+  W_UNIFORMITY_OVERALL: 100.0 # 전체 영역 균일도
   W_UNIFORMITY_CENTER: 100.0 # 중앙부 균일도
   W_UNIFORMITY_WHITE: 200.0   # White LED 균일도
   
