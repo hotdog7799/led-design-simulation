@@ -51,9 +51,9 @@ led_specs:
 
 # --- White LED 설정 ---
 white_led:
-  num_to_place: 2
+  num_to_place: 4
   crosstalk_min_distance_mm: 5.0
-  x_offset_mm: 6.5 # X축 대칭 배치 위치 (a, b 최적화 시 사용)
+  # x_offset_mm: 6.5 # X축 대칭 배치 위치 (a, b 최적화 시 사용)
 
 # --- 시뮬레이션 정밀도 ---
 simulation:
@@ -63,8 +63,8 @@ simulation:
 
 # --- 최적화 파라미터 탐색 범위 ---
 optimization_ranges:
-  a_range: {start: 1.0, stop: 8.1, step: 5.2}
-  b_range: {start: 5.4, stop: 9.1, step: 5.2}
+  a_range: {start: 1.0, stop: 8.1, step: 1.0}
+  b_range: {start: 5.4, stop: 9.1, step: 1.0}
   
   # # for Preset Original
   # a_range: {start: 1.53, stop: 8.1, step: 100.0}
@@ -75,8 +75,9 @@ loss_weights:
   TARGET_POWER_MW: 34.0
 
   W_POWER: 100.0
-  W_UNIFORMITY_UV: 500.0 # 전체 영역 균일도
-  W_UNIFORMITY_CENTER: 1000.0 # 중앙부 균일도
+  W_POWER_CENTER: 300.0
+  W_UNIFORMITY_OVERALL: 400.0 # 전체 영역 균일도
+  W_UNIFORMITY_CENTER: 100.0 # 중앙부 균일도
   W_UNIFORMITY_WHITE: 200.0   # White LED 균일도
   
   # Hard constraint -> Pass/Fail로 변경

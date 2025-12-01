@@ -154,9 +154,9 @@ def run_optimization_sweep(params):
     center_ratio = config["optics"]["center_roi_ratio"]
 
     num_uv = config["led_specs"]["num_uv_leds"]
-    num_white = config["white_led"]["num_to_place"]
+    num_white_target = config["white_led"]["num_to_place"]
     min_sep = config["led_specs"]["min_led_separation_mm"]
-    white_x_offset = config["white_led"]["x_offset_mm"]
+    # white_x_offset = config["white_led"]["x_offset_mm"]
     min_crosstalk_dist = config["white_led"]["crosstalk_min_distance_mm"]
     single_power_mw = config["led_specs"]["single_led_total_power_mw"]
     loss_weights = config["loss_weights"]
@@ -176,102 +176,86 @@ def run_optimization_sweep(params):
     # [NEW] White LED Reference Simulation (Pre-calculation)
     # White LED 위치는 (±x_offset, 0)으로 고정되어 있으므로 루프 밖에서 한 번만 계산
     # ==========================================================================
-    print("--- Pre-calculating White LED Illumination (Area Source Mode) ---")
-    fixed_white_positions = [
-        np.array([white_x_offset, 0, 0]),
-        np.array([-white_x_offset, 0, 0]),
-    ]
+    # print("--- Pre-calculating White LED Illumination (Area Source Mode) ---")
+    # fixed_white_positions = [
+    #     np.array([white_x_offset, 0, 0]),
+    #     np.array([-white_x_offset, 0, 0]),
+    # ]
 
     # White LED도 동일한 면 광원 로직(led_geom)을 사용하여 시뮬레이션
-    _, _, white_illum_map = led_sim.simulate_illumination(
-        fixed_white_positions,
-        beam_func,
-        actual_dist,
-        grid_size,
-        resolution,
-        led_geom_params=led_geom,
-    )
+    # _, _, white_illum_map = led_sim.simulate_illumination(
+    #     fixed_white_positions,
+    #     beam_func,
+    #     actual_dist,
+    #     grid_size,
+    #     resolution,
+    #     led_geom_params=led_geom,
+    # )
 
     # White LED의 Uniformity 점수 미리 계산
-    _, white_uni_all, white_uni_center, _ = led_sim.analyze_roi(
-        _, _, white_illum_map, roi_w, roi_h, single_power_mw, num_white, center_ratio
-    )
-    print(f"White LED Reference Uniformity: {white_uni_all:.3f}")
+    # _, white_uni_all, white_uni_center, _ = led_sim.analyze_roi(
+    #     _, _, white_illum_map, roi_w, roi_h, single_power_mw, num_white, center_ratio
+    # )
+    # print(f"White LED Reference Uniformity: {white_uni_all:.3f}")
 
     results_list = []
     total_combinations = len(param_combinations)
     print(
-        f"--- Starting UV Optimization Search ({total_combinations} combinations) ---"
+        f"--- Starting Optimization Search ({total_combinations} combinations) ---"
     )
-
+# Loop 시작
     for idx, (a, b) in enumerate(param_combinations):
-        # 1. UV LED 배치
-        uv_led_positions = led_sim.create_4_symmetric_uv_layout(
-            a, b, cavity_w, cavity_h, min_sep
-        )
-        if not uv_led_positions:
-            continue
+        
+        # 1. UV 배치 (기존 동일)
+        uv_led_positions = led_sim.create_4_symmetric_uv_layout(a, b, cavity_w, cavity_h, min_sep)
+        if not uv_led_positions: continue
 
-        # 2. White LED 배치 검사 (Hard Constraint)
-        white_led_positions, crosstalk_penalty = led_sim.place_white_leds_fixed_xaxis(
-            uv_led_positions,
-            white_x_offset,
-            num_white,
-            min_crosstalk_dist,
-            0,  # Penalty 값은 이제 안 씀
+        # 2. [변경] White LED 동적 배치 (Gap Filling)
+        white_led_positions, crosstalk_penalty = led_sim.optimize_white_leds_radial(
+            uv_led_positions, cavity_w, cavity_h, num_white_target, min_crosstalk_dist, 
+            loss_weights.get("W_CROSSTALK", 10000) # Fallback 값
         )
 
-        # [UPDATE] Crosstalk 발생 시 아예 탈락시킴 (Hard Constraint)
-        if len(white_led_positions) < num_white:
-            continue  # Skip this configuration
+        # White 배치 실패(개수 부족) 시 Skip (Hard Constraint)
+        if len(white_led_positions) < num_white_target:
+            continue 
 
-        # 3. 시뮬레이션 수행
-        X_mm, Y_mm, uv_illum_map = led_sim.simulate_illumination(
-            uv_led_positions,
-            beam_func,
-            actual_dist,
-            grid_size,
-            resolution,
-            led_geom_params=led_geom,
+        # 3. 시뮬레이션 (UV & White 각각 수행)
+        # UV Map
+        X, Y, uv_map = led_sim.simulate_illumination(
+             uv_led_positions, beam_func, actual_dist, grid_size, resolution, led_geom_params=led_geom
         )
-        power_uv, uni_uv_all, uni_uv_cen, _ = led_sim.analyze_roi(
-            X_mm,
-            Y_mm,
-            uv_illum_map,
-            roi_w,
-            roi_h,
-            single_power_mw,
-            num_uv,
-            center_ratio,
+        # White Map (동적 위치)
+        _, _, white_map = led_sim.simulate_illumination(
+             white_led_positions, beam_func, actual_dist, grid_size, resolution, led_geom_params=led_geom
         )
 
-        # 4. Loss 계산 (정규화된 방식)
-        # calculate_loss 함수 인자에서 crosstalk_penalty 제거됨
-        total_loss, p_pen, u_all_pen, u_cen_pen = led_sim.calculate_loss(
-            power_uv, uni_uv_all, uni_uv_cen, white_uni_all, loss_weights
+        # 4. 분석 (Center Power 포함)
+        # UV Analysis
+        p_uv, cp_uv, u_uv, uc_uv, _ = led_sim.analyze_roi(
+            X, Y, uv_map, roi_w, roi_h, single_power_mw, num_uv, center_ratio
+        )
+        # White Analysis
+        p_wh, cp_wh, u_wh, uc_wh, _ = led_sim.analyze_roi(
+            X, Y, white_map, roi_w, roi_h, single_power_mw, len(white_led_positions), center_ratio
         )
 
-        results_list.append(
-            {
-                "a_mm": round(a, 2),
-                "b_mm": round(b, 2),
-                "Pwr_UV_mW": round(power_uv, 2),
-                "Uni_UV_All": round(uni_uv_all, 3),
-                "Uni_UV_Cen": round(uni_uv_cen, 3),
-                "Total_Loss": round(
-                    total_loss, 4
-                ),  # Loss가 작아질 수 있으므로 소수점 늘림
-                "Valid": True,
-            }
+        # 5. Loss 계산 (Center Power 반영)
+        total_loss, _, _, _ = led_sim.calculate_loss(
+            p_uv, cp_uv, u_uv, uc_uv, u_wh, loss_weights, center_ratio
         )
 
-        # 진행 상황 출력 (100개마다)
-        if idx % 100 == 0:
-            print(
-                f"({idx}/{total_combinations}) a={a:.2f}, b={b:.2f} -> Loss={total_loss:.4f}"
-            )
-
-    return results_list, white_illum_map  # 시각화를 위해 화이트 맵도 반환
+        results_list.append({
+            "a_mm": a, "b_mm": b,
+            "Pwr_UV": round(p_uv, 2),
+            "Pwr_UV_Center": round(cp_uv, 2), # [중요] 로그 확인용
+            "Uni_UV": round(u_uv, 3),
+            "Num_White": len(white_led_positions),
+            "Total_Loss": round(total_loss, 4),
+            "Valid": True
+        })
+        
+    return results_list, None # Map 반환 안 함 (plot에서 다시 그림)
 
 
 # ======================================================================================

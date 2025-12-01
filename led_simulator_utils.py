@@ -7,7 +7,88 @@ from scipy.interpolate import interp1d
 # ======================================================================================
 # 1. 핵심 물리 및 배치 함수
 # ======================================================================================
+# [NEW] White LED 동적 배치 알고리즘
+def optimize_white_leds_radial(
+    uv_led_positions, cavity_w, cavity_h, num_white_target, min_crosstalk_dist, w_crosstalk
+):
+    """
+    Cavity 주변을 360도 스캔하여 UV LED와 간섭이 없는 '명당'을 찾아 White LED를 배치합니다.
+    """
+    # 탐색 궤도: Cavity보다 1mm 정도 여유를 둔 타원형/원형 궤도
+    margin = 1.0 
+    rx = (cavity_w / 2.0) + margin
+    ry = (cavity_h / 2.0) + margin
+    
+    # 1도 단위로 후보 위치 스캔
+    angles = np.deg2rad(np.linspace(0, 360, 360, endpoint=False))
+    valid_positions = []
+    
+    for theta in angles:
+        # 타원 궤도상의 좌표 계산
+        x = rx * np.cos(theta)
+        y = ry * np.sin(theta)
+        pos = np.array([x, y, 0])
+        
+        # Crosstalk 거리 검사
+        distances = [np.linalg.norm(pos - uv) for uv in uv_led_positions]
+        min_dist = min(distances) if distances else 100.0
+        
+        if min_dist >= min_crosstalk_dist:
+            # (위치, UV와의 거리) 저장 -> 멀리 떨어질수록 안전하지만, 너무 멀면 광량 손해.
+            # 여기서는 '안전하기만 하면' 일단 후보로 등록
+            valid_positions.append(pos)
+    
+    # 배치 로직: 최대한 서로 멀리 떨어지게 배치 (Greedy 방식)
+    selected_positions = []
+    if not valid_positions:
+        return [], w_crosstalk # 배치 실패
+        
+    # 첫 번째는 임의로(또는 UV 사이 가장 넓은 공간에) 배치할 수 있으나,
+    # 간단히 0도에 가장 가까운 유효 위치부터 시작
+    # (더 정교한 알고리즘 가능하지만 시뮬레이션 속도 고려)
+    # 여기서는 단순히 리스트에서 간격을 두며 뽑습니다.
+    
+    # valid_positions 리스트에서 등간격으로 뽑아내기 시도
+    if len(valid_positions) < num_white_target:
+        # 후보가 목표보다 적으면 있는 거라도 다 넣음
+        selected_positions = valid_positions
+    else:
+        # K-Means나 복잡한 로직 대신, 각도 기준으로 4분면 등을 고려해 뽑는게 좋음.
+        # 가장 간단하고 효과적인 방법: 
+        # 후보군 중 하나 뽑고 -> 그거랑 먼거 뽑고 -> 반복
+        import random
+        # 시뮬레이션 재현성을 위해 시드 고정 혹은 결정론적 방법 사용 권장
+        # 여기서는 가장 단순하게: 
+        # 4개 목표라면 0, 90, 180, 270도 근처의 유효 좌표를 우선 탐색
+        target_angles = np.linspace(0, 2*np.pi, num_white_target, endpoint=False)
+        
+        for target_th in target_angles:
+            # 타겟 각도와 가장 가까운 유효 후보 찾기
+            best_candidate = None
+            min_ang_diff = 100.0
+            
+            target_pos = np.array([rx * np.cos(target_th), ry * np.sin(target_th), 0])
+            
+            for vp in valid_positions:
+                # 이미 선택된 애들과 너무 가까우면(겹치면) 패스
+                if any(np.linalg.norm(vp - sp) < 2.0 for sp in selected_positions): 
+                    continue
+                
+                dist = np.linalg.norm(vp - target_pos)
+                if dist < min_ang_diff: # 좌표 거리로 근사
+                    min_ang_diff = dist
+                    best_candidate = vp
+            
+            if best_candidate is not None:
+                selected_positions.append(best_candidate)
 
+    # 개수 부족 시 페널티
+    penalty = 0.0
+    if len(selected_positions) < num_white_target:
+        # 목표 개수보다 적으면 개당 페널티 부과 (강력하게)
+        penalty = w_crosstalk * (num_white_target - len(selected_positions))
+
+    return selected_positions, penalty
 
 def get_beam_profile_func(angles, intensities):
     """
@@ -189,43 +270,46 @@ def analyze_roi(
     center_vals = illum_map[center_mask]
 
     if center_vals.size > 0:
+        # [핵심] 중앙부 절대 파워 (mW)
+        center_power_mw = np.sum(center_vals) * pixel_area_mm2 * scale_factor
+        
         c_max = np.max(center_vals)
         c_min = np.min(center_vals)
         uni_center = (c_min / c_max) if c_max > 0 else 0.0
     else:
+        center_power_mw = 0.0
         uni_center = 0.0
 
-    return roi_power_mw, uni_overall, uni_center, scale_factor
+    return roi_power_mw,center_power_mw, uni_overall, uni_center, scale_factor
 
 
-def calculate_loss(power_roi, uni_overall, uni_center, uni_white, weights):
-    """
-    [Engineering Update]
-    모든 항목을 비율(%) 단위로 정규화하여 가중치를 적용합니다.
-    Loss = Weight * (Error_Ratio)^2
-    """
+def calculate_loss(power_roi, center_power_mw, uni_overall, uni_center, uni_white, weights, center_ratio=0.5):
     target_power = weights["TARGET_POWER_MW"]
-
-    # 1. Power Penalty (Normalized Squared Error)
-    # 목표보다 적을 때만 페널티. (목표 - 현재) / 목표 = 부족한 비율 (0.0 ~ 1.0)
+    
+    # 1. Total Power Loss (Normalized)
     if power_roi < target_power:
-        power_error_ratio = (target_power - power_roi) / target_power
+        p_loss = weights["W_POWER"] * ((target_power - power_roi)/target_power)**2
     else:
-        power_error_ratio = 0.0  # 목표 달성 시 페널티 없음 (오히려 좋을 수도 있음)
+        p_loss = 0.0
+        
+    # 2. [NEW] Center Power Loss (핵심)
+    # 목표: 전체 파워 목표의 (면적비 * 0.8) 정도는 중앙에 있어야 한다고 가정
+    # 예: 면적비가 0.25라면(0.5*0.5), 전체 파워의 20%는 중앙에 집중되어야 함.
+    target_center = target_power * (center_ratio**2) * 0.8 
+    
+    if center_power_mw < target_center:
+        # 중앙이 어두우면 강력한 페널티!
+        cp_loss = weights["W_POWER_CENTER"] * ((target_center - center_power_mw)/target_center)**2
+    else:
+        cp_loss = 0.0
 
-    # 오차가 커질수록 페널티를 급격하게 주기 위해 제곱(Square) 사용
-    power_penalty = weights["W_POWER"] * (power_error_ratio**2)
+    # 3. Uniformity Loss
+    u_all_loss = weights["W_UNIFORMITY_OVERALL"] * (1 - uni_overall)**2
+    u_cen_loss = weights["W_UNIFORMITY_CENTER"] * (1 - uni_center)**2
+    u_wht_loss = weights["W_UNIFORMITY_WHITE"] * (1 - uni_white)**2
 
-    # 2. Uniformity Penalties (Normalized Squared Error)
-    # 균일도는 1.0이 목표이므로, (1.0 - Uniformity) 자체가 오차 비율임
-    pen_uni_overall = weights["W_UNIFORMITY_UV"] * ((1.0 - uni_overall) ** 2)
-    pen_uni_center = weights["W_UNIFORMITY_CENTER"] * ((1.0 - uni_center) ** 2)
-    pen_uni_white = weights["W_UNIFORMITY_WHITE"] * ((1.0 - uni_white) ** 2)
-
-    # 3. Total Loss Summation
-    loss = power_penalty + pen_uni_overall + pen_uni_center + pen_uni_white
-
-    return loss, power_penalty, pen_uni_overall, pen_uni_center
+    total_loss = p_loss + cp_loss + u_all_loss + u_cen_loss + u_wht_loss
+    return total_loss, p_loss, cp_loss, u_all_loss
 
 
 # ======================================================================================
