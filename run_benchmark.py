@@ -97,7 +97,12 @@ def evaluate_presets():
         combined_map = uv_map + white_map
         p_comb, _, u_comb, uc_comb, _ = led_sim.analyze_roi(X, Y, combined_map, roi_w, roi_h, single_power_mw, len(uv_pos)+len(white_pos), center_ratio)
         
-        led_sim.plot_irradiance_map(axes[2], combined_map, extent, uv_pos, white_pos,
+        led_sim.plot_irradiance_map(axes[2],
+         combined_map,
+          extent,
+          plot_params,
+           uv_pos,
+            white_pos,
                                     {"power": p_comb, "uni_all": u_comb, "uni_cen": uc_comb}, f"{name} - Combined", led_geom_params=led_geom)
         
         plt.tight_layout()
